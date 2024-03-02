@@ -39,7 +39,7 @@ def save_links_to_csv(links, file_name):
             writer.writerow([link])
 
 
-def setup_selenium_driver(download_folder="data/pdfs/"):
+def setup_selenium_driver(download_folder="data/downloads/"):
     chrome_options = Options()
 
     # Specify the path to ChromeDriver executable
@@ -118,7 +118,7 @@ if __name__ == "__main__":
     max_cases = int(input("How many cases would you like to download?: "))
     results_url = construct_search_results_url(base_url, search_term)
     links = fetch_full_document_links(results_url, max_cases)
-    save_links_to_csv(links, file_name="data/index.csv")
-    print("Index of Downloaded PDFs saved to data/index.csv. Initiating download...")
+    save_links_to_csv(links, file_name="data/downloads/index.csv")
+    print("Index of Downloaded PDFs saved to data/downloads/index.csv. Initiating download...")
     download_pdfs_from_links(links)
     print("All downloads completed!")
