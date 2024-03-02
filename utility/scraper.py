@@ -1,11 +1,12 @@
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from urllib.parse import urlencode
 from bs4 import BeautifulSoup
-import re
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
 import time
-import os
 import csv
 
 
@@ -38,113 +39,45 @@ def save_links_to_csv(links, file_name):
             writer.writerow([link])
 
 
-def requests_retry_session(
-    retries=3,
-    backoff_factor=1,  # Increased backoff_factor for a more conservative approach
-    status_forcelist=(429, 500, 502, 504),  # Including 429 in the retry status codes
-    session=None,
-):
-    session = session or requests.Session()
-    retry = Retry(
-        total=retries,
-        read=retries,
-        connect=retries,
-        backoff_factor=backoff_factor,
-        status_forcelist=status_forcelist,
-        respect_retry_after_header=True,  # Ensure we respect 'Retry-After'
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
+def setup_selenium_driver(download_folder="data/pdfs/"):
+    chrome_options = Options()
+
+    # Specify the path to ChromeDriver executable
+    # Make sure to provide the correct path or manage the driver with webdriver-manager
+    service = Service(ChromeDriverManager().install())
+
+    # Set up Chrome preferences to automate download behavior:
+    prefs = {
+        "download.default_directory": download_folder,  # specifies the directory to download files
+        "download.prompt_for_download": False,  # disables the download prompt
+        "download.directory_upgrade": True,  # refers to a feature Chrome has to auto-open certain file types
+        "plugins.always_open_pdf_externally": True,  # automatically opens PDFs
+        "safebrowsing.enabled": True,  # provides safe browsing protections
+    }
+    chrome_options.add_experimental_option("prefs", prefs)
+
+    # Additional options to run Chrome in headless mode if needed (uncomment if required)
+    chrome_options.add_argument("--headless")
+
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    return driver
 
 
-def extract_document_id(action_url):
-    """
-    Extract the document ID from the action URL.
-    Assuming the URL follows a pattern like: https://indiankanoon.org/doc/155481249/
-    """
-    match = re.search(r"/doc/(\d+)/", action_url)
-    if match:
-        return match.group(1)
-    return None
-
-
-def download_document_pdf(action_url):
-    os.makedirs("data/pdfs", exist_ok=True)
-    doc_id = extract_document_id(action_url)
-    if not doc_id:
-        print(f"Failed to extract document ID from URL: {action_url}")
-        return
-
-    filename = f"{doc_id}.pdf"
-    file_path = os.path.join("data/pdfs/", filename)
-    data_payload = {"type": "pdf"}
-
-    with requests_retry_session(retries=5, backoff_factor=2) as session:
-        response = session.post(action_url, data=data_payload)
-        if response.status_code == 200:
-            with open(file_path, "wb") as f:
-                f.write(response.content)
-            print(f"Successfully downloaded {file_path}")
-        elif response.status_code == 429:
-            delay = int(
-                response.headers.get("Retry-After", 60)
-            )  # Fallback to 60 seconds
-            print(f"Rate limited. Retrying after {delay} seconds.")
-            time.sleep(delay)
-            download_document_pdf(action_url)  # Recursive retry
-        else:
-            print(
-                f"Failed to download PDF for document ID {doc_id}, Status code: {response.status_code}"
-            )
-    os.makedirs("data/pdfs", exist_ok=True)
-    doc_id = extract_document_id(action_url)
-    if not doc_id:
-        print(f"Failed to extract document ID from URL: {action_url}")
-        return
-
-    filename = f"{doc_id}.pdf"
-    file_path = os.path.join("data/pdfs", filename)
-    data_payload = {"type": "pdf"}
-
-    with requests_retry_session() as session:
-        response = session.post(action_url, data=data_payload)
-        if response.status_code == 200:
-            with open(file_path, "wb") as f:
-                f.write(response.content)
-        else:
-            print(
-                f"Failed to download PDF for document ID {doc_id}, Status code: {response.status_code}"
-            )
-
-
-def fetch_and_download_pdfs(links):
+def download_pdfs_from_links(links):
+    driver = setup_selenium_driver()
     for link in links:
-        with requests_retry_session(retries=5, backoff_factor=2) as session:
-            response = session.get(link)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, "html.parser")
-                form = soup.find("form")
-                if form and "action" in form.attrs:
-                    action_url = "https://indiankanoon.org" + form["action"]
-                    # Perform document PDF download
-                    download_document_pdf(action_url)
-                else:
-                    print("Form not found for", link)
-            elif response.status_code == 429:
-                delay = int(response.headers.get("Retry-After", 60))
-                print(f"Rate limited. Retrying after {delay} seconds.")
-                time.sleep(delay)
-                # With the retry mechanism, there might be a subsequent attempt after this delay
-            else:
-                # Handle other error status codes
-                print(
-                    f"Failed to fetch page for {link}, Status code: {response.status_code}"
-                )
-
-        # Adding a delay of 2 seconds between downloads to avoid overwhelming the server
-        time.sleep(2)
+        try:
+            driver.get(link)
+            # Wait for page to load - consider using explicit wait here for more reliability
+            time.sleep(1)
+            # Find and click the download button
+            download_button = driver.find_element(By.ID, "pdfdoc")
+            download_button.click()
+            # Add a delay to ensure the file gets downloaded before moving to the next link
+            print(f"Downloaded document from {link}")
+        except Exception as e:
+            print(f"An error occurred while downloading the document from {link}: {e}")
+    driver.quit()
 
 
 def construct_search_results_url(base_url, search_term):
@@ -166,22 +99,26 @@ def construct_search_results_url(base_url, search_term):
     return results_url
 
 
-# Example usage:
-if __name__ == "__main__":
-    base_url = "https://indiankanoon.org"
-    search_term = "qureshi doctypes: supremecourt"
-    results_url = construct_search_results_url(base_url, search_term)
-    print(f"Search Results URL: {results_url}")
-
-
-# Interactive mode:
 if __name__ == "__main__":
     print("Welcome to the Indian Kanoon PDF Downloader!")
+    print(" ")
+    print(
+        "This program will download PDFs of legal cases from Indian Kanoon based on your search term."
+    )
+    print(" ")
+    print(
+        "Ensure you have a stable and fast internet connection to avoid interruptions."
+    )
+    print(
+        "ATTENTION: This program is relatively slow, will take on an average 1 second per download!"
+    )
+    print(" ")
     base_url = "https://indiankanoon.org"
     search_term = input("What type of cases are you looking for?: ")
     max_cases = int(input("How many cases would you like to download?: "))
     results_url = construct_search_results_url(base_url, search_term)
     links = fetch_full_document_links(results_url, max_cases)
-    save_links_to_csv(links, "data/index.csv")
+    save_links_to_csv(links, file_name="data/index.csv")
     print("Index of Downloaded PDFs saved to data/index.csv. Initiating download...")
-    fetch_and_download_pdfs(links)
+    download_pdfs_from_links(links)
+    print("All downloads completed!")
